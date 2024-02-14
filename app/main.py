@@ -1,8 +1,10 @@
 from datetime import datetime
+from typing import Any, Dict
 from pydantic import BaseModel
 from fastapi import FastAPI, status, HTTPException, Depends
 from sqlalchemy.orm import Session
-from . import models
+
+from . import models, schemas
 from .database import engine, get_db
 
 
@@ -19,11 +21,6 @@ class Clientes(BaseModel):
     valor: int
     tipo: str
     descricao: str
-
-
-@app.get("/")
-def root(db: Session = Depends(get_db)):
-    return {"message": "Hello World"}
 
 
 clientes: list = [
@@ -100,8 +97,21 @@ def busca_cliente(id: int) -> tuple[int, dict]:
     return (-1, {})
 
 
+@app.get("/")
+def root():
+    return {"message": "Hello World"}
+
+
+@app.get("/sqlalchemy")
+def test_clientes(db: Session = Depends(get_db)):
+    cliente = db.query(models.Clientes).all()
+    return {"data": cliente}
+
+
 @app.post("/clientes/{id}/transacoes", response_model=None)
-def transacoes(id: int, valor: int, tipo: str, descricao: str) -> dict | HTTPException:
+def transacoes(
+    id: int, tipo: str, valor: int, descricao: str, db: Session = Depends(get_db)
+) -> dict | HTTPException:
     """
     {
         "valor": 1000,
@@ -119,43 +129,70 @@ def transacoes(id: int, valor: int, tipo: str, descricao: str) -> dict | HTTPExc
         limite: deve ser o limite cadastrado do cliente.
         saldo: deve ser o novo saldo após a conclusão da transação.
     """
+    # id, tipo, valor, descricao = (*transacao.model_dump().values(),)
 
-    cliente_id = busca_cliente(id)
-    if cliente_id[0] == -1:
+    cliente_query = db.query(models.Clientes).filter(models.Clientes.id == id)
+    cliente = cliente_query.first()
+
+    if cliente is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Cliente não encontrado",
         )
 
-    cliente = cliente_id[1]
-
-    saldo: int = 0
+    saldo = 0
     if tipo == "c":
-        saldo = cliente["saldo"]["total"] + valor
+        saldo = cliente.saldo + valor
     elif tipo == "d":
-        if cliente["limite"] <= valor and cliente["saldo"]["total"] <= valor:
-            saldo = cliente["saldo"]["total"] - valor
-        else:
+        if cliente.limite <= valor:  # type: ignore
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Limite insuficiente",
             )
+        elif cliente.saldo >= valor:  # type: ignore
+            saldo = cliente.saldo - valor
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Saldo insuficiente",
+            )
 
-    cliente["saldo"]["total"] = saldo
-    cliente["saldo"]["ultimas_transacoes"].append(
-        {
-            "valor": valor,
-            "tipo": tipo,
-            "descricao": descricao,
-            "realizada_em": datetime.now().isoformat(),
-        }
+    print(saldo)
+    cliente_atualizado: Dict[_DMLColumnArgument, Any] = {
+        "id": id,
+        "limite": cliente.limite,
+        "saldo": saldo,
+    }
+    # commit update tabela cliente
+    cliente_query.update(cliente_atualizado, synchronize_session=False)
+
+    # commit update tabela transacoes
+    # cliente["saldo"]["ultimas_transacoes"].append(
+    #     {
+    #         "valor": valor,
+    #         "tipo": tipo,
+    #         "descricao": descricao,
+    #         "realizada_em": datetime.now().isoformat(),
+    #     }
+    # )
+    nova_transacao = models.Transacoes(
+        id_cliente=id,
+        valor=valor,
+        tipo=tipo,
+        descricao=descricao,
+        realizada_em=datetime.now().isoformat(),
     )
+    print(nova_transacao)
 
-    return {"limite": cliente["limite"], "saldo": cliente["saldo"]["total"]}
+    db.add(nova_transacao)
+    db.commit()
+    db.refresh(nova_transacao)
+
+    return {"data": nova_transacao}
 
 
 @app.get("/clientes/{id}/extrato", response_model=None)
-def extrato(id: int) -> dict | HTTPException:
+def extrato(id: int, db: Session = Depends(get_db)) -> dict | HTTPException:
     """
     {
         "saldo": {
@@ -180,28 +217,30 @@ def extrato(id: int) -> dict | HTTPException:
     }
     """
 
-    cliente_id = busca_cliente(id)
-    if cliente_id[0] == -1:
+    cliente = db.query(models.Clientes).filter(models.Clientes.id == id).first()
+    if cliente is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Cliente não encontrado",
         )
 
-    cliente = cliente_id[1]
+    transacoes = (
+        db.query(models.Transacoes).filter(models.Transacoes.id_cliente == 1).all()
+    )
 
-    transacoes: list = []
-    index: int = 0
-    while index < len(cliente["saldo"]["ultimas_transacoes"]):
-        transacoes.append(cliente["saldo"]["ultimas_transacoes"][index])
-        index += 1
-        if index >= 10:
-            break
+    # transacoes: list = []
+    # index: int = 0
+    # while index < len(cliente["saldo"]["ultimas_transacoes"]):
+    #     transacoes.append(cliente["saldo"]["ultimas_transacoes"][index])
+    #     index += 1
+    #     if index >= 10:
+    #         break
 
     extrato = {
         "saldo": {
-            "total": cliente["saldo"]["total"],
+            "total": cliente.saldo,
             "data_extrato": datetime.now().isoformat(),
-            "limite": cliente["saldo"]["limite"],
+            "limite": cliente.limite,
         },
         "ultimas_transacoes": transacoes,
     }
