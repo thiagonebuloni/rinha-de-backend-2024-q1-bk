@@ -1,10 +1,10 @@
 from datetime import datetime
 from typing import Any, Dict
-from pydantic import BaseModel
 from fastapi import FastAPI, status, HTTPException, Depends
+from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from . import models, schemas
+from . import models
 from .database import engine, get_db
 
 
@@ -15,86 +15,6 @@ from .database import engine, get_db
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
-
-
-class Clientes(BaseModel):
-    valor: int
-    tipo: str
-    descricao: str
-
-
-clientes: list = [
-    {
-        "id": 1,
-        "limite": 100000,
-        "saldo": {
-            "total": 0,
-            "data_extrato": "",
-            "limite": 100000,
-            "ultimas_transacoes": [
-                {
-                    "valor": 10,
-                    "tipo": "c",
-                    "descricao": "descrito",
-                    "realizada_em": "2024-01-17T02:34:38.543030Z",
-                },
-                {
-                    "valor": 90000,
-                    "tipo": "d",
-                    "descricao": "debitooooo",
-                    "realizada_em": "2024-01-17T02:34:38.543030Z",
-                },
-            ],
-        },
-    },
-    {
-        "id": 2,
-        "limite": 80000,
-        "saldo": {
-            "total": 0,
-            "data_extrato": "",
-            "limite": 100000,
-            "ultimas_transacoes": [],
-        },
-    },
-    {
-        "id": 3,
-        "limite": 1000000,
-        "saldo": {
-            "total": 0,
-            "data_extrato": "",
-            "limite": 100000,
-            "ultimas_transacoes": [],
-        },
-    },
-    {
-        "id": 4,
-        "limite": 10000000,
-        "saldo": {
-            "total": 0,
-            "data_extrato": "",
-            "limite": 100000,
-            "ultimas_transacoes": [],
-        },
-    },
-    {
-        "id": 5,
-        "limite": 500000,
-        "saldo": {
-            "total": 0,
-            "data_extrato": "",
-            "limite": 100000,
-            "ultimas_transacoes": [],
-        },
-    },
-]
-
-
-def busca_cliente(id: int) -> tuple[int, dict]:
-    for cliente in clientes:
-        if cliente["id"] == id:
-            return (1, cliente)
-    return (-1, {})
 
 
 @app.get("/")
@@ -110,7 +30,7 @@ def test_clientes(db: Session = Depends(get_db)):
 
 @app.post("/clientes/{id}/transacoes", response_model=None)
 def transacoes(
-    id: int, tipo: str, valor: int, descricao: str, db: Session = Depends(get_db)
+    id: int, valor: int, tipo: str, descricao: str, db: Session = Depends(get_db)
 ) -> dict | HTTPException:
     """
     {
@@ -129,7 +49,6 @@ def transacoes(
         limite: deve ser o limite cadastrado do cliente.
         saldo: deve ser o novo saldo após a conclusão da transação.
     """
-    # id, tipo, valor, descricao = (*transacao.model_dump().values(),)
 
     cliente_query = db.query(models.Clientes).filter(models.Clientes.id == id)
     cliente = cliente_query.first()
@@ -158,7 +77,7 @@ def transacoes(
             )
 
     print(saldo)
-    cliente_atualizado: Dict[_DMLColumnArgument, Any] = {
+    cliente_atualizado: Dict[Any, Any] = {
         "id": id,
         "limite": cliente.limite,
         "saldo": saldo,
@@ -166,15 +85,6 @@ def transacoes(
     # commit update tabela cliente
     cliente_query.update(cliente_atualizado, synchronize_session=False)
 
-    # commit update tabela transacoes
-    # cliente["saldo"]["ultimas_transacoes"].append(
-    #     {
-    #         "valor": valor,
-    #         "tipo": tipo,
-    #         "descricao": descricao,
-    #         "realizada_em": datetime.now().isoformat(),
-    #     }
-    # )
     nova_transacao = models.Transacoes(
         id_cliente=id,
         valor=valor,
@@ -182,13 +92,17 @@ def transacoes(
         descricao=descricao,
         realizada_em=datetime.now().isoformat(),
     )
-    print(nova_transacao)
 
     db.add(nova_transacao)
     db.commit()
     db.refresh(nova_transacao)
 
-    return {"data": nova_transacao}
+    transacao_formatada = {
+        "limite": cliente.limite,
+        "saldo": cliente.saldo,
+    }
+
+    return transacao_formatada
 
 
 @app.get("/clientes/{id}/extrato", response_model=None)
@@ -225,16 +139,22 @@ def extrato(id: int, db: Session = Depends(get_db)) -> dict | HTTPException:
         )
 
     transacoes = (
-        db.query(models.Transacoes).filter(models.Transacoes.id_cliente == 1).all()
+        db.query(models.Transacoes)
+        .filter(models.Transacoes.id_cliente == id)
+        .order_by(desc(models.Transacoes.realizada_em))
+        .all()
     )
 
-    # transacoes: list = []
-    # index: int = 0
-    # while index < len(cliente["saldo"]["ultimas_transacoes"]):
-    #     transacoes.append(cliente["saldo"]["ultimas_transacoes"][index])
-    #     index += 1
-    #     if index >= 10:
-    #         break
+    # formatada para padrao solicitado e limitada em 10 transacoes
+    trans: list = []
+
+    for t in transacoes[:10]:
+        transacoes_formatadas: dict = {}
+        transacoes_formatadas["valor"] = t.valor
+        transacoes_formatadas["tipo"] = t.tipo
+        transacoes_formatadas["descricao"] = t.descricao
+        transacoes_formatadas["realizada_em"] = t.realizada_em
+        trans.append(transacoes_formatadas)
 
     extrato = {
         "saldo": {
@@ -242,7 +162,7 @@ def extrato(id: int, db: Session = Depends(get_db)) -> dict | HTTPException:
             "data_extrato": datetime.now().isoformat(),
             "limite": cliente.limite,
         },
-        "ultimas_transacoes": transacoes,
+        "ultimas_transacoes": trans,
     }
 
     return extrato
