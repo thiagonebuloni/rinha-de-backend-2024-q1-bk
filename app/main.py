@@ -22,12 +22,6 @@ def root():
     return {"message": "Hello World"}
 
 
-@app.get("/sqlalchemy")
-def test_clientes(db: Session = Depends(get_db)):
-    cliente = db.query(models.Clientes).all()
-    return {"data": cliente}
-
-
 @app.post("/clientes/{id}/transacoes", response_model=None)
 def transacoes(
     id: int, valor: int, tipo: str, descricao: str, db: Session = Depends(get_db)
