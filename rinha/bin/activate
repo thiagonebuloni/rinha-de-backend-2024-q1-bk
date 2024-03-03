@@ -38,7 +38,7 @@ deactivate () {
 # unset irrelevant variables
 deactivate nondestructive
 
-VIRTUAL_ENV="/media/thiago/hd1/Cursos/Programming/Python/rinha-de-backend-2024-q1/rinha"
+VIRTUAL_ENV="/media/thiago/hd11/Cursos/Programming/Python/rinha-de-backend-2024-q1/rinha"
 export VIRTUAL_ENV
 
 _OLD_VIRTUAL_PATH="$PATH"
